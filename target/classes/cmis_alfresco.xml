@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:json="http://www.mulesoft.org/schema/mule/json" xmlns:apikit="http://www.mulesoft.org/schema/mule/apikit" xmlns:cmis="http://www.mulesoft.org/schema/mule/cmis" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" 
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/cmis http://www.mulesoft.org/schema/mule/cmis/current/mule-cmis.xsd
+http://www.mulesoft.org/schema/mule/apikit http://www.mulesoft.org/schema/mule/apikit/current/mule-apikit.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd">
+    <http:request-config name="HTTP_Request_Configuration" host="localhost" port="8081" doc:name="HTTP Request Configuration"/>
+    <cmis:config name="CMIS__Configuration" baseUrl="http://localhost:9292/alfresco/api/-default-/public/cmis/versions/1.1/atom" username="admin" password="1234" useAlfrescoExtension="true" doc:name="CMIS: Configuration"/>
+    <http:listener-config name="HTTP_Listener_Configuration" host="localhost" port="8081" doc:name="HTTP Listener Configuration"/>
+    <flow name="cmis_alfrescoFlow">
+        <http:listener config-ref="HTTP_Listener_Configuration" path="/getFileData" doc:name="HTTP"/>
+        <expression-component doc:name="Extract File Id"><![CDATA[flowVars['nodeRef'] = message.inboundProperties.'http.query.params'.nodeRef;]]></expression-component>
+        <cmis:get-object-by-id config-ref="CMIS__Configuration" objectId="#[nodeRef]" doc:name="CMIS"/>
+        <component class="com.crezcamos.mule.alfresco.cmis.content.GetContentProps" doc:name="Java"/>
+        <json:object-to-json-transformer doc:name="Object to JSON"/>
+        <choice-exception-strategy doc:name="Choice Exception Strategy">
+            <catch-exception-strategy when="#[exception.causedBy(org.apache.chemistry.opencmis.commons.exceptions.CmisObjectNotFoundException)]" doc:name="Catch Exception Strategy">
+                <set-property propertyName="Content-Type" value="application/json" doc:name="Property"/>
+                <set-payload value="{ &quot;message&quot;: &quot;Resource not found&quot; }" doc:name="Set Payload"/>
+            </catch-exception-strategy>
+        </choice-exception-strategy>
+    </flow>
+    <flow name="httpMultipartRequestFlow">
+        <http:listener config-ref="HTTP_Listener_Configuration" path="/uploadFile" doc:name="HTTP" allowedMethods="POST"/>
+        <expression-component doc:name="Extract attachment filename"><![CDATA[var contentDispositionHeaderValue = message.inboundAttachments['file'].dataSource.getHeader('Content-Disposition').trim();
+flowVars['attachmentFileName'] = contentDispositionHeaderValue.substring(contentDispositionHeaderValue.indexOf("filename=") + "filename=".length() + 1, contentDispositionHeaderValue.length() - 1);
+flowVars['pathAttachment'] = new java.lang.String(message.inboundAttachments.'dirpath'.dataSource.content);
+flowVars['mimeType'] = new java.lang.String(message.inboundAttachments.'mime-type'.dataSource.content);
+
+]]></expression-component>
+        <cmis:get-or-create-folder-by-path config-ref="CMIS__Configuration" folderPath="#[pathAttachment]" doc:name="CMIS"/>
+        <logger message="Dirpath: #[new java.lang.String(message.inboundAttachments.'dirpath'.dataSource.content)]" level="INFO" doc:name="Log file content type"/>
+        <set-payload value="#[message.inboundAttachments['file'].dataSource.content]" doc:name="Set file content as payload"/>
+        <cmis:create-document-by-path config-ref="CMIS__Configuration" filename="#[attachmentFileName]" folderPath="#[pathAttachment]" mimeType="#[mimeType]" objectType="cmis:document" versioningState="MINOR" doc:name="Create document by path"/>
+        <json:object-to-json-transformer doc:name="Object to JSON"/>
+        <choice-exception-strategy doc:name="Choice Exception Strategy">
+            <catch-exception-strategy when="#[exception.causedBy(org.apache.chemistry.opencmis.commons.exceptions.CmisContentAlreadyExistsException)]" doc:name="Catch Exception StrategyS">
+                <set-property propertyName="Content-Type" value="application/json" doc:name="Property"/>
+                <set-payload value="{ &quot;message&quot;: &quot;File already exists&quot; }" doc:name="Set Payload"/>
+            </catch-exception-strategy>
+        </choice-exception-strategy>
+    </flow>
+    <flow name="cmis_alfrescoFlow_delete">
+        <http:listener config-ref="HTTP_Listener_Configuration" path="/deleteFile" doc:name="HTTP"/>
+        <expression-component doc:name="Extract File Id"><![CDATA[flowVars['nodeRef'] = message.inboundProperties.'http.query.params'.nodeRef;]]></expression-component>
+        <cmis:delete config-ref="CMIS__Configuration" objectId="#[nodeRef]" allVersions="true" doc:name="CMIS"/>
+        <choice-exception-strategy doc:name="cmis_alfrescoChoice_Exception_Strategy">
+            <catch-exception-strategy when="#[exception.causedBy(org.apache.chemistry.opencmis.commons.exceptions.CmisObjectNotFoundException)]" doc:name="Catch Exception Strategy">
+                <set-property propertyName="Content-Type" value="application/json" doc:name="Property"/>
+                <set-payload value="{ &quot;message&quot;: &quot;Resource not found&quot; }" doc:name="Set Payload"/>
+            </catch-exception-strategy>
+        </choice-exception-strategy>
+    </flow>
+    <flow name="cmis_alfrescoFlow_getFile">
+        <http:listener config-ref="HTTP_Listener_Configuration" path="/getFile" doc:name="HTTP"/>
+        <expression-component doc:name="Extract File Id"><![CDATA[flowVars['nodeRef'] = message.inboundProperties.'http.query.params'.nodeRef;]]></expression-component>
+        <cmis:get-object-by-id config-ref="CMIS__Configuration" objectId="#[nodeRef]" doc:name="CMIS"/>
+        <set-payload value="#[payload.getContentStream()]" doc:name="Set Payload"/>
+        <set-variable variableName="mime" value="#[payload.getMimeType()]" doc:name="mime"/>
+        <set-variable variableName="name" value="#[payload.getFileName()]" doc:name="name"/>
+        <set-property propertyName="Content-Type" value="#[flowVars['mime']]" doc:name="Property"/>
+        <set-property propertyName="File-Name" value="#[flowVars['name']]" doc:name="Property"/>
+        <choice-exception-strategy doc:name="Choice Exception Strategy">
+            <catch-exception-strategy when="#[exception.causedBy(org.apache.chemistry.opencmis.commons.exceptions.CmisObjectNotFoundException)]" doc:name="Catch Exception Strategy">
+                <set-property propertyName="Content-Type" value="application/json" doc:name="Property"/>
+                <set-payload value="{ &quot;message&quot;: &quot;Resource not found&quot; }" doc:name="Set Payload"/>
+            </catch-exception-strategy>
+        </choice-exception-strategy>
+    </flow>
+</mule>
